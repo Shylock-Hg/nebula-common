@@ -251,8 +251,9 @@ struct UserItem {
 
 struct RoleItem {
     1: binary               user_id,
-    2: common.GraphSpaceID  space_id,
-    3: RoleType             role_type,
+    2: string               space_name,
+    3: common.GraphSpaceID  space_id,
+    4: RoleType             role_type,
 }
 
 struct ExecResp {
