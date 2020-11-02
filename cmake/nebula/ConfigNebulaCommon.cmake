@@ -25,6 +25,7 @@ macro(config_nebula_common)
                 -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
                 -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
                 -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+                -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
                 -DNEBULA_THIRDPARTY_ROOT=${NEBULA_THIRDPARTY_ROOT}
                 -DNEBULA_OTHER_ROOT=${NEBULA_OTHER_ROOT}
                 -DENABLE_JEMALLOC=${ENABLE_JEMALLOC}
@@ -48,6 +49,12 @@ macro(config_nebula_common)
     add_custom_target(
         common_project ALL
         COMMAND +${CMAKE_COMMAND} --build ${common_build_dir}
+    )
+
+    add_custom_target(
+        install-common
+        COMMAND $(MAKE) install
+        WORKING_DIRECTORY ${common_build_dir}
     )
 
     add_custom_target(
