@@ -136,6 +136,12 @@ void MetaClient::heartBeatThreadFunc() {
             localLastUpdateTime_ = metadLastUpdateTime_;
         }
     }
+    if (localLastLeaderUpdateTime_ < metadLastLeaderUpdateTime_) {
+        auto result = syncLeader();
+        if (result.ok()) {
+            localLastLeaderUpdateTime_ = metadLastLeaderUpdateTime_;
+        }
+    }
 }
 
 
@@ -251,8 +257,6 @@ bool MetaClient::loadData() {
         spaceIndexByName.emplace(space.second, spaceId);
     }
 
-    auto leaderMap = loadLeader(spaceIndexByName, cache);
-
     decltype(localCache_) oldCache;
     {
         folly::RWSpinLock::WriteHolder holder(localCacheLock_);
@@ -266,19 +270,12 @@ bool MetaClient::loadData() {
         spaceEdgeIndexByType_   = std::move(spaceEdgeIndexByType);
         spaceTagIndexById_      = std::move(spaceTagIndexById);
         spaceAllEdgeMap_        = std::move(spaceAllEdgeMap);
-        if (leaderMap.ok()) {
-            leaderMap_              = leaderMap.value();
-        }
     }
 
     diff(oldCache, localCache_);
     listenerDiff(oldCache, localCache_);
     loadRemoteListeners();
     ready_ = true;
-    // TODO(shylock) using separate timestamp to avoid conflict with meta data
-    if (!leaderMap.ok()) {
-        return false;
-    }
     return true;
 }
 
@@ -2153,7 +2150,7 @@ MetaClient::getStorageLeaderFromCache(std::pair<GraphSpaceID, PartitionID> part)
         return Status::Error("Not ready!");
     }
 
-    folly::RWSpinLock::ReadHolder holder(localCacheLock_);
+    folly::RWSpinLock::ReadHolder holder(leaderMapLock_);
     auto findLeader = leaderMap_.find(part);
     if (findLeader == leaderMap_.end()) {
         return Status::Error("No valid leader.");
@@ -2166,7 +2163,7 @@ StatusOr<LeaderMap> MetaClient::getStorageLeaderFromCache() const {
         return Status::Error("Not ready!");
     }
 
-    folly::RWSpinLock::ReadHolder holder(localCacheLock_);
+    folly::RWSpinLock::ReadHolder holder(leaderMapLock_);
     return leaderMap_;
 }
 
@@ -2352,6 +2349,7 @@ folly::Future<StatusOr<bool>> MetaClient::heartbeat() {
                         }
                     }
                     metadLastUpdateTime_ = resp.get_last_update_time_in_ms();
+                    metadLastLeaderUpdateTime_ = resp.get_last_leader_update_time_in_ms();
                     VLOG(1) << "Metad last update time: " << metadLastUpdateTime_;
                     return true;  // resp.code == cpp2::ErrorCode::SUCCEEDED
                 },
@@ -3023,8 +3021,7 @@ Status MetaClient::refreshCache() {
 }
 
 
-StatusOr<LeaderMap> MetaClient::loadLeader(const SpaceNameIdMap &spaceNameId,
-                                           const LocalCache &localCache) {
+StatusOr<LeaderMap> MetaClient::loadLeader() {
     auto ret = listHosts().get();
     if (!ret.ok()) {
         return Status::Error("List hosts failed");
@@ -3033,11 +3030,12 @@ StatusOr<LeaderMap> MetaClient::loadLeader(const SpaceNameIdMap &spaceNameId,
     LeaderMap leaderMap;
     auto hostItems = std::move(ret).value();
     std::unordered_map<GraphSpaceID, std::size_t> leaderCount;
+    folly::RWSpinLock::ReadHolder holder(localCacheLock_);
     for (auto& item : hostItems) {
         for (auto& spaceEntry : item.get_leader_parts()) {
             auto spaceName = spaceEntry.first;
-            auto find = spaceNameId.find(spaceName);
-            if (find == spaceNameId.end()) {
+            auto find = spaceIndexByName_.find(spaceName);
+            if (find == spaceIndexByName_.end()) {
                 continue;
             }
             auto spaceId = find->second;
@@ -3051,7 +3049,7 @@ StatusOr<LeaderMap> MetaClient::loadLeader(const SpaceNameIdMap &spaceNameId,
     }
     // check leader count
     // for the lazy expired host
-    for (const auto &space : localCache) {
+    for (const auto &space : localCache_) {
         const auto find = leaderCount.find(space.first);
         if (find == leaderCount.end()) {
             return Status::Error("Get mismatched leaders.");
@@ -3064,6 +3062,14 @@ StatusOr<LeaderMap> MetaClient::loadLeader(const SpaceNameIdMap &spaceNameId,
     }
     LOG(INFO) << "Load leader ok";
     return leaderMap;
+}
+
+Status MetaClient::syncLeader() {
+    auto leaderMapResult = loadLeader();
+    NG_RETURN_IF_ERROR(leaderMapResult);
+    folly::RWSpinLock::WriteHolder wh(leaderMapLock_);
+    leaderMap_ = std::move(leaderMapResult).value();
+    return Status::OK();
 }
 
 folly::Future<StatusOr<bool>>

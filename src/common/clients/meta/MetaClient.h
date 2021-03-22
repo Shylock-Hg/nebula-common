@@ -671,7 +671,8 @@ protected:
 
     ListenersMap doGetListenersMap(const HostAddr& host, const LocalCache& localCache);
 
-    StatusOr<LeaderMap> loadLeader(const SpaceNameIdMap &spaceNameId, const LocalCache &localCache);
+    StatusOr<LeaderMap> loadLeader();
+    Status syncLeader();
 
 private:
     std::shared_ptr<folly::IOThreadPoolExecutor> ioThreadPool_;
@@ -681,6 +682,8 @@ private:
     folly::RWSpinLock     leaderIdsLock_;
     int64_t               localLastUpdateTime_{0};
     int64_t               metadLastUpdateTime_{0};
+    int64_t               localLastLeaderUpdateTime_{0};
+    int64_t               metadLastLeaderUpdateTime_{0};
 
     LocalCache localCache_;
     std::vector<HostAddr> addrs_;
@@ -707,10 +710,12 @@ private:
     NameIndexMap          edgeNameIndexMap_;
     FulltextClientsList   fulltextClientList_;
 
-    // storage leader cache
-    LeaderMap             leaderMap_;
-
     mutable folly::RWSpinLock     localCacheLock_;
+
+    // storage leader cache
+    LeaderMap                     leaderMap_;
+    mutable folly::RWSpinLock     leaderMapLock_;
+
     // The listener_ is the NebulaStore
     MetaChangedListener*  listener_{nullptr};
     // The lock used to protect listener_
